@@ -1,11 +1,10 @@
-name: Try to Create OCI VM (Debug Mode)
+name: Try to Create OCI VM (Final Fix)
 on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
 env:
   OCI_CLI_REGION: "ap-singapore-1"
-  AD_NAME: "KClJ:AP-SINGAPORE-1-AD-1"
 
 jobs:
   build-and-deploy:
@@ -25,22 +24,13 @@ jobs:
         id: create_vm
         continue-on-error: true 
         run: |
-          # 开启详细追踪模式，每执行一行命令都会在日志里打印出来
-          set -x
-
-          echo "===== 📋 Step 1: 正在安装甲骨文官方 CLI 工具 ====="
+          set -o pipefail
           pip install oci-cli
-          
-          echo "===== 📋 Step 2: 正在写入并检查私钥格式 ====="
+
           mkdir -p ~/.oci
           echo "${{ secrets.OCI_CLI_KEY_CONTENT }}" > ~/.oci/oci_api_key.pem
           chmod 600 ~/.oci/oci_api_key.pem
-          
-          # 打印私钥的前几行和后几行（敏感内容已自动脱敏，仅看格式是否完整）
-          head -n 2 ~/.oci/oci_api_key.pem
-          tail -n 2 ~/.oci/oci_api_key.pem
 
-          echo "===== 📋 Step 3: 正在生成 OCI 配置文件 ====="
           echo "[DEFAULT]" > ~/.oci/config
           echo "user=${{ secrets.OCI_CLI_USER }}" >> ~/.oci/config
           echo "tenancy=${{ secrets.OCI_CLI_TENANCY }}" >> ~/.oci/config
@@ -48,45 +38,38 @@ jobs:
           echo "key_file=~/.oci/oci_api_key.pem" >> ~/.oci/config
           echo "region=${{ env.OCI_CLI_REGION }}" >> ~/.oci/config
           
-          echo "===== 📋 Step 4: 正在写入 SSH 登录公钥 ====="
           echo "${{ secrets.SSH_PUBLIC_KEY }}" > /home/runner/my_ssh_key.pub
-          echo "🔑 检查公钥前缀: $(head -c 30 /home/runner/my_ssh_key.pub)..."
 
-          echo "===== 📋 Step 5: 正在测试与甲骨文服务器的连通性 ====="
-          # 先尝试获取用户敏感信息，测试凭证到底通不通
-          oci iam user get --user-id "${{ secrets.OCI_CLI_USER }}" || echo "❌ 凭证通信测试失败，请检查用户ID、租户ID或私钥是否正确！"
+          echo "===== 🔍 自动化智能诊断：正在实时抓取你账号在新加坡唯一的真实可用区 ====="
+          MY_REAL_AD=$(oci iam availability-domain list --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" --query "data[0].name" --raw-output)
+          echo "✅ 成功获取你专属的真实可用区: $MY_REAL_AD"
 
-          echo "===== 📋 Step 6: 正在发起开机冲击 ====="
-          # 这一次我们不屏蔽错误，让完整的报错直接喷在 GitHub 的日志屏幕上
-          oci compute instance launch \
+          echo "===== 🔍 自动化智能诊断：正在实时拉取新加坡当前最新的标准 Ubuntu 镜像 ====="
+          MY_REAL_IMAGE=$(oci compute image list --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" --operating-system "Canonical Ubuntu" --shape "VM.Standard.A1.Flex" --query "data[0].id" --raw-output)
+          echo "✅ 成功获取新加坡机房最新官方镜像: $MY_REAL_IMAGE"
+
+          echo "===== 🚀 正在发起参数完美的开机冲击 ====="
+          OCI_OUTPUT=$(oci compute instance launch \
             --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" \
-            --availability-domain "${{ env.AD_NAME }}" \
+            --availability-domain "$MY_REAL_AD" \
             --shape "VM.Standard.A1.Flex" \
             --shape-config '{"ocpus":1,"memoryInGBs":6}' \
             --subnet-id "${{ secrets.OCI_SUBNET_ID }}" \
-            --image-id "${{ secrets.IMAGE_ID }}" \
+            --image-id "$MY_REAL_IMAGE" \
             --ssh-authorized-keys-file "/home/runner/my_ssh_key.pub" \
             --assign-public-ip true \
             --display-name "coolify-vm" \
-            --boot-volume-size-in-gbs 45 > /tmp/oci_success.json 2> /tmp/oci_error.log || OCI_EC=$?
+            --boot-volume-size-in-gbs 45 2>&1 || true)
 
-          if [ -f /tmp/oci_success.json ] && [ -s /tmp/oci_success.json ]; then
-            echo "🎉🎉🎉 【核心日志】开机请求发送成功！"
-            cat /tmp/oci_success.json
-            
-            # 把日志传递给 Discord 
-            echo "log_data<<EOF" >> $GITHUB_OUTPUT
-            cat /tmp/oci_success.json >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+          echo "log_data<<EOF" >> $GITHUB_OUTPUT
+          echo "$OCI_OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          if echo "$OCI_OUTPUT" | grep -q '"lifecycle-state": "PROVISIONING"'; then
+            echo "Success! 'PROVISIONING' state found in output."
             exit 0
           else
-            echo "❌❌❌ 【核心日志】开机请求失败！甲骨文返回的错误详情如下："
-            cat /tmp/oci_error.log
-            
-            # 把报错日志传递给 Discord 
-            echo "log_data<<EOF" >> $GITHUB_OUTPUT
-            cat /tmp/oci_error.log >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+            echo "Error: Success string not found in OCI output."
             exit 1
           fi
 
