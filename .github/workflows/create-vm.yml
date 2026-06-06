@@ -1,5 +1,4 @@
-name: Try to Create OCI VM
-# 每 15 分钟温和运行一次，绝不触发高频风控
+name: Try to Create OCI VM (Debug Mode)
 on:
   schedule:
     - cron: "*/15 * * * *"
@@ -26,15 +25,22 @@ jobs:
         id: create_vm
         continue-on-error: true 
         run: |
-          set -o pipefail
+          # 开启详细追踪模式，每执行一行命令都会在日志里打印出来
+          set -x
 
+          echo "===== 📋 Step 1: 正在安装甲骨文官方 CLI 工具 ====="
           pip install oci-cli
-
+          
+          echo "===== 📋 Step 2: 正在写入并检查私钥格式 ====="
           mkdir -p ~/.oci
-          # 直接从保险箱读取私钥，拒绝任何中间商格式变形
           echo "${{ secrets.OCI_CLI_KEY_CONTENT }}" > ~/.oci/oci_api_key.pem
           chmod 600 ~/.oci/oci_api_key.pem
+          
+          # 打印私钥的前几行和后几行（敏感内容已自动脱敏，仅看格式是否完整）
+          head -n 2 ~/.oci/oci_api_key.pem
+          tail -n 2 ~/.oci/oci_api_key.pem
 
+          echo "===== 📋 Step 3: 正在生成 OCI 配置文件 ====="
           echo "[DEFAULT]" > ~/.oci/config
           echo "user=${{ secrets.OCI_CLI_USER }}" >> ~/.oci/config
           echo "tenancy=${{ secrets.OCI_CLI_TENANCY }}" >> ~/.oci/config
@@ -42,11 +48,17 @@ jobs:
           echo "key_file=~/.oci/oci_api_key.pem" >> ~/.oci/config
           echo "region=${{ env.OCI_CLI_REGION }}" >> ~/.oci/config
           
-          # 读取你的本地登录公钥
+          echo "===== 📋 Step 4: 正在写入 SSH 登录公钥 ====="
           echo "${{ secrets.SSH_PUBLIC_KEY }}" > /home/runner/my_ssh_key.pub
+          echo "🔑 检查公钥前缀: $(head -c 30 /home/runner/my_ssh_key.pub)..."
 
-          # === 🧘 彻底修好原生调用 + 降配安全线（1核6G 硬盘45G） ===
-          OCI_OUTPUT=$(oci compute instance launch \
+          echo "===== 📋 Step 5: 正在测试与甲骨文服务器的连通性 ====="
+          # 先尝试获取用户敏感信息，测试凭证到底通不通
+          oci iam user get --user-id "${{ secrets.OCI_CLI_USER }}" || echo "❌ 凭证通信测试失败，请检查用户ID、租户ID或私钥是否正确！"
+
+          echo "===== 📋 Step 6: 正在发起开机冲击 ====="
+          # 这一次我们不屏蔽错误，让完整的报错直接喷在 GitHub 的日志屏幕上
+          oci compute instance launch \
             --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" \
             --availability-domain "${{ env.AD_NAME }}" \
             --shape "VM.Standard.A1.Flex" \
@@ -56,18 +68,25 @@ jobs:
             --ssh-authorized-keys-file "/home/runner/my_ssh_key.pub" \
             --assign-public-ip true \
             --display-name "coolify-vm" \
-            --boot-volume-size-in-gbs 45 2>&1 || true)
+            --boot-volume-size-in-gbs 45 > /tmp/oci_success.json 2> /tmp/oci_error.log || OCI_EC=$?
 
-          # 打包日志传递给通知模块
-          echo "log_data<<EOF" >> $GITHUB_OUTPUT
-          echo "$OCI_OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-          if echo "$OCI_OUTPUT" | grep -q '"lifecycle-state": "PROVISIONING"'; then
-            echo "Success! 'PROVISIONING' state found in output."
+          if [ -f /tmp/oci_success.json ] && [ -s /tmp/oci_success.json ]; then
+            echo "🎉🎉🎉 【核心日志】开机请求发送成功！"
+            cat /tmp/oci_success.json
+            
+            # 把日志传递给 Discord 
+            echo "log_data<<EOF" >> $GITHUB_OUTPUT
+            cat /tmp/oci_success.json >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
             exit 0
           else
-            echo "Error: Success string not found in OCI output. Failing the step."
+            echo "❌❌❌ 【核心日志】开机请求失败！甲骨文返回的错误详情如下："
+            cat /tmp/oci_error.log
+            
+            # 把报错日志传递给 Discord 
+            echo "log_data<<EOF" >> $GITHUB_OUTPUT
+            cat /tmp/oci_error.log >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
             exit 1
           fi
 
