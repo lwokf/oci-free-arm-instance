@@ -21,6 +21,7 @@ jobs:
         run: echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Setup OCI CLI and Try to Create VM
+        id: create_vm
         run: |
           pip install oci-cli
 
@@ -44,10 +45,10 @@ jobs:
           MY_REAL_AD=$(oci iam availability-domain list --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" --query "data[0].name" --raw-output)
           MY_REAL_IMAGE=$(oci compute image list --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" --operating-system "Canonical Ubuntu" --shape "VM.Standard.A1.Flex" --query "data[0].id" --raw-output)
 
-          echo "===== 🚀 开始发起开机，甲骨文回执将直接在下方输出 ====="
+          echo "===== 🚀 开始发起开机冲击 ====="
           
-          # 直接运行，不通过变量中转，让甲骨文的日志直接喷在大屏幕上！
-          oci compute instance launch \
+          # 捕获输出，允许失败
+          OCI_OUTPUT=$(oci compute instance launch \
             --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" \
             --availability-domain "$MY_REAL_AD" \
             --shape "VM.Standard.A1.Flex" \
@@ -57,4 +58,35 @@ jobs:
             --ssh-authorized-keys-file "/home/runner/my_ssh_key.pub" \
             --assign-public-ip true \
             --display-name "coolify-vm" \
-            --boot-volume-size-in-gbs 50
+            --boot-volume-size-in-gbs 50 2>&1 || true)
+
+          # 将原始回执打包，供下方通知模块调阅
+          echo "log_data<<EOF" >> $GITHUB_OUTPUT
+          echo "$OCI_OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # 判断是否包含正在创建的关键字
+          if echo "$OCI_OUTPUT" | grep -q '"lifecycle-state": "PROVISIONING"'; then
+            echo "is_success=true" >> $GITHUB_ENV
+            echo "🎉🎉🎉 恭喜老哥！抢机成功！"
+          else
+            echo "is_success=false" >> $GITHUB_ENV
+            echo "❌ 机房没货（Out of host capacity），本次安静退出，绝不打扰。"
+          fi
+
+      # 🌟 核心魔改：加了 if 条件，只有当上面抢成功（is_success 为 true）时，这一步才会执行！
+      - name: Send Discord Notification
+        if: env.is_success == 'true'
+        uses: sarisia/actions-status-discord@v1.15.4
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: "🚀 【大奖喜报】甲骨文 ARM 成功开机！"
+          status: "success"
+          color: "0x28a745"
+          description: |
+            老哥！大盘鸡它终于开出来了！快去甲骨文后台看看吧！
+            
+            **成功回执日志:**
+            ```json
+            ${{ steps.create_vm.outputs.log_data }}
+            ```
