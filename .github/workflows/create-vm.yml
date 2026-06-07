@@ -1,4 +1,4 @@
-name: Try to Create OCI VM (Final Fix)
+name: Try to Create OCI VM
 on:
   schedule:
     - cron: "*/15 * * * *"
@@ -21,10 +21,7 @@ jobs:
         run: echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Setup OCI CLI and Try to Create VM
-        id: create_vm
-        continue-on-error: true 
         run: |
-          set -o pipefail
           pip install oci-cli
 
           mkdir -p ~/.oci
@@ -40,16 +37,17 @@ jobs:
           
           echo "${{ secrets.SSH_PUBLIC_KEY }}" > /home/runner/my_ssh_key.pub
 
-          echo "===== 🔍 自动化智能诊断：正在实时抓取你账号在新加坡唯一的真实可用区 ====="
+          export OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True
+          export SUPPRESS_LABEL_WARNING=True
+
+          echo "===== 🔍 正在自动获取最新参数 ====="
           MY_REAL_AD=$(oci iam availability-domain list --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" --query "data[0].name" --raw-output)
-          echo "✅ 成功获取你专属的真实可用区: $MY_REAL_AD"
-
-          echo "===== 🔍 自动化智能诊断：正在实时拉取新加坡当前最新的标准 Ubuntu 镜像 ====="
           MY_REAL_IMAGE=$(oci compute image list --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" --operating-system "Canonical Ubuntu" --shape "VM.Standard.A1.Flex" --query "data[0].id" --raw-output)
-          echo "✅ 成功获取新加坡机房最新官方镜像: $MY_REAL_IMAGE"
 
-          echo "===== 🚀 正在发起参数完美的开机冲击 ====="
-          OCI_OUTPUT=$(oci compute instance launch \
+          echo "===== 🚀 开始发起开机，甲骨文回执将直接在下方输出 ====="
+          
+          # 直接运行，不通过变量中转，让甲骨文的日志直接喷在大屏幕上！
+          oci compute instance launch \
             --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" \
             --availability-domain "$MY_REAL_AD" \
             --shape "VM.Standard.A1.Flex" \
@@ -59,33 +57,4 @@ jobs:
             --ssh-authorized-keys-file "/home/runner/my_ssh_key.pub" \
             --assign-public-ip true \
             --display-name "coolify-vm" \
-            --boot-volume-size-in-gbs 50 2>&1 || true)
-
-          echo "log_data<<EOF" >> $GITHUB_OUTPUT
-          echo "$OCI_OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-          if echo "$OCI_OUTPUT" | grep -q '"lifecycle-state": "PROVISIONING"'; then
-            echo "Success! 'PROVISIONING' state found in output."
-            exit 0
-          else
-            echo "Error: Success string not found in OCI output."
-            exit 1
-          fi
-
-      - name: Send Discord Notification
-        if: always()
-        uses: sarisia/actions-status-discord@v1.15.4
-        with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          title: "OCI VM Status: ${{ steps.create_vm.outcome }}"
-          status: ${{ steps.create_vm.outcome }}
-          color: ${{ steps.create_vm.outcome == 'success' && '0x28a745' || '0xdc3545' }}
-          description: |
-            Attempt to create A1.Flex VM.
-            **Status:** `${{ steps.create_vm.outcome }}`
-
-            **Log Output:**
-            ```json
-            ${{ steps.create_vm.outputs.log_data }}
-            ```
+            --boot-volume-size-in-gbs 50
