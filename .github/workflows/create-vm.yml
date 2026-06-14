@@ -1,6 +1,7 @@
 name: Try to Create OCI VM
 on:
   schedule:
+    # 🧘 安全养生频率：改成每 15 分钟温和冲锋一次，彻底告别 429 限流
     - cron: "*/15 * * * *"
   workflow_dispatch:
 env:
@@ -23,6 +24,11 @@ jobs:
       - name: Setup OCI CLI and Try to Create VM
         id: create_vm
         run: |
+          # 🎭 随机延迟 1 到 45 秒再执行，打破固定规律，伪装成真人操作
+          SLEEP_TIME=$((1 + RANDOM % 45))
+          echo "💤 为了防风控防限流，随机静默等待 $SLEEP_TIME 秒..."
+          sleep $SLEEP_TIME
+
           pip install oci-cli
 
           mkdir -p ~/.oci
@@ -45,14 +51,13 @@ jobs:
           MY_REAL_AD=$(oci iam availability-domain list --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" --query "data[0].name" --raw-output)
           MY_REAL_IMAGE=$(oci compute image list --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" --operating-system "Canonical Ubuntu" --shape "VM.Standard.A1.Flex" --query "data[0].id" --raw-output)
 
-          echo "===== 🚀 开始发起开机冲击 ====="
+          echo "===== 🚀 开始发起新政极限 2核12G 开机冲击 ====="
           
-          # 捕获输出，允许失败
           OCI_OUTPUT=$(oci compute instance launch \
             --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" \
             --availability-domain "$MY_REAL_AD" \
             --shape "VM.Standard.A1.Flex" \
-            --shape-config '{"ocpus":1,"memoryInGBs":6}' \
+            --shape-config '{"ocpus":2,"memoryInGBs":12}' \
             --subnet-id "${{ secrets.OCI_SUBNET_ID }}" \
             --image-id "$MY_REAL_IMAGE" \
             --ssh-authorized-keys-file "/home/runner/my_ssh_key.pub" \
@@ -60,31 +65,28 @@ jobs:
             --display-name "coolify-vm" \
             --boot-volume-size-in-gbs 50 2>&1 || true)
 
-          # 将原始回执打包，供下方通知模块调阅
           echo "log_data<<EOF" >> $GITHUB_OUTPUT
           echo "$OCI_OUTPUT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          # 判断是否包含正在创建的关键字
           if echo "$OCI_OUTPUT" | grep -q '"lifecycle-state": "PROVISIONING"'; then
             echo "is_success=true" >> $GITHUB_ENV
-            echo "🎉🎉🎉 恭喜老哥！抢机成功！"
+            echo "🎉🎉🎉 恭喜老哥！在新政 2核12G 规则下抢机成功！"
           else
             echo "is_success=false" >> $GITHUB_ENV
             echo "❌ 机房没货（Out of host capacity），本次安静退出，绝不打扰。"
           fi
 
-      # 🌟 核心魔改：加了 if 条件，只有当上面抢成功（is_success 为 true）时，这一步才会执行！
       - name: Send Discord Notification
         if: env.is_success == 'true'
         uses: sarisia/actions-status-discord@v1.15.4
         with:
           webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          title: "🚀 【大奖喜报】甲骨文 ARM 成功开机！"
+          title: "🚀 【大奖喜报】新政 2核12G ARM 成功开机！"
           status: "success"
           color: "0x28a745"
           description: |
-            老哥！大盘鸡它终于开出来了！快去甲骨文后台看看吧！
+            老哥！新政下极限 2核12G 的大盘鸡它终于开出来了！快去甲骨文后台看看吧！
             
             **成功回执日志:**
             ```json
